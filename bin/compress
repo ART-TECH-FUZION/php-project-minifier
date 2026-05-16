@@ -150,13 +150,7 @@ function createConfig($directory) {
         'source' => './',
         'output' => './compress',
         'exclude' => [
-            'node_modules',
-            'vendor',
-            '.git',
-            '.env',
-            'compress',
-            '*.min.js',
-            '*.min.css'
+            '.git'
         ],
         'extensions' => ['php', 'html', 'htm', 'css', 'js', 'json', 'jsx', 'xml'],
         'createIndex' => true,
@@ -238,7 +232,6 @@ function main($argv) {
     // Options
     $minimal = in_array('--min', $options);
     $dryRun = in_array('--dry-run', $options);
-    $createIndex = !in_array('--no-index', $options);
     $watch = in_array('--watch', $options);
     
     // Print banner if not minimal
@@ -257,11 +250,15 @@ function main($argv) {
         }
         $config = json_decode(file_get_contents($configPath), true) ?? [];
     }
+
+    $createIndex = in_array('--no-index', $options)
+        ? false
+        : ($config['createIndex'] ?? true);
     
     // Initialize compressor
     $compressor = new Compressor([
         'createIndex' => $createIndex,
-        'exclude' => $config['exclude'] ?? ['node_modules', 'vendor', '.git', 'compress', '.env'],
+        'exclude' => $config['exclude'] ?? ['.git'],
         'extensions' => $config['extensions'] ?? ['php', 'html', 'htm', 'css', 'js', 'json', 'jsx', 'xml']
     ]);
     

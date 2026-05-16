@@ -22,7 +22,7 @@ class Compressor {
     
     private $config = [
         'extensions' => ['php', 'html', 'htm', 'css', 'js', 'json', 'jsx', 'xml'],
-        'exclude' => ['node_modules', 'vendor', '.git', '.env', 'compress'],
+        'exclude' => ['.git'],
         'createIndex' => true,
         'indexContent' => "<?php\n// Silence is golden.\n"
     ];
@@ -115,7 +115,9 @@ class Compressor {
             }
             
             // Check exclude patterns
-            if ($this->isExcluded($file, is_dir($srcPath))) {
+            $relativePath = $this->getRelativePath($srcPath);
+
+            if ($this->isExcluded($relativePath, is_dir($srcPath))) {
                 $this->stats['ignored']++;
                 continue;
             }
@@ -270,27 +272,10 @@ class Compressor {
                 
                 // Template literals
                 if (!$inString && $char === '`') {
-                    $inString = true;
-                    $stringChar = '`';
-                    $result .= $char;
-                    $lastChar = $char;
-                    $i++;
-                    continue;
-                }
-                
-                if ($inString && $stringChar === '`') {
-                    $result .= $char;
-                    if ($char === '\\' && $i + 1 < $len) {
-                        $i++;
-                        $result .= $js[$i];
-                        $lastChar = $js[$i];
-                    } elseif ($char === '`') {
-                        $inString = false;
-                        $lastChar = $char;
-                    } else {
-                        $lastChar = $char;
-                    }
-                    $i++;
+                    [$templateLiteral, $nextIndex] = $this->consumeTemplateLiteral($js, $i);
+                    $result .= $templateLiteral;
+                    $lastChar = substr($templateLiteral, -1);
+                    $i = $nextIndex;
                     continue;
                 }
                 
@@ -335,26 +320,7 @@ class Compressor {
                 
                 // Regex detection
                 if ($char === '/' && !$inString) {
-                    $canBeRegex = false;
-                    
-                    if (preg_match('/[=(:,;\[!&|?{}~^%+*\/-]$/', $result)) {
-                        $canBeRegex = true;
-                    }
-                    
-                    $trimmed = strtolower(trim($result));
-                    if (preg_match('/(return|case|typeof|instanceof|in|delete|void|throw|new|yield|await)\s*$/', $trimmed)) {
-                        $canBeRegex = true;
-                    }
-                    
-                    if ($result === '') {
-                        $canBeRegex = true;
-                    }
-                    
-                    if (preg_match('/[a-zA-Z0-9_$]$/', $result)) {
-                        $canBeRegex = false;
-                    }
-                    
-                    if ($canBeRegex) {
+                    if ($this->canStartJsRegex($result)) {
                         $inRegex = true;
                         $result .= $char;
                         $lastChar = $char;
@@ -368,6 +334,11 @@ class Compressor {
             if ($inLineComment) {
                 if ($char === "\n") {
                     $inLineComment = false;
+                    $nextSignificant = $this->getNextNonWhitespaceChar($js, $i + 1);
+                    if ($this->needsTokenSeparator($lastChar, $nextSignificant, false)) {
+                        $result .= ' ';
+                        $lastChar = ' ';
+                    }
                 }
                 $i++;
                 continue;
@@ -377,8 +348,12 @@ class Compressor {
             if ($inBlockComment) {
                 if ($char === '*' && $nextChar === '/') {
                     $inBlockComment = false;
+                    $nextSignificant = $this->getNextNonWhitespaceChar($js, $i + 2);
+                    if ($this->needsTokenSeparator($lastChar, $nextSignificant, false)) {
+                        $result .= ' ';
+                        $lastChar = ' ';
+                    }
                     $i += 2;
-                    $lastChar = ' ';
                     continue;
                 }
                 $i++;
@@ -816,11 +791,9 @@ class Compressor {
             if ($inLineComment) {
                 if ($char === "\n") {
                     $inLineComment = false;
-                    $trimmedResult = rtrim($result);
-                    if (preg_match('/[;{}\)]$/', $trimmedResult)) {
-                        $result .= "\n";
-                        $lastChar = "\n";
-                    } else {
+                    $nextSignificant = $this->getNextNonWhitespaceChar($code, $i + 1);
+                    if ($this->needsTokenSeparator($lastChar, $nextSignificant, true)) {
+                        $result .= ' ';
                         $lastChar = ' ';
                     }
                 }
@@ -832,8 +805,12 @@ class Compressor {
             if ($inBlockComment) {
                 if ($char === '*' && $nextChar === '/') {
                     $inBlockComment = false;
+                    $nextSignificant = $this->getNextNonWhitespaceChar($code, $i + 2);
+                    if ($this->needsTokenSeparator($lastChar, $nextSignificant, true)) {
+                        $result .= ' ';
+                        $lastChar = ' ';
+                    }
                     $i += 2;
-                    $lastChar = ' ';
                     continue;
                 }
                 $i++;
@@ -847,12 +824,9 @@ class Compressor {
                     continue;
                 }
                 
-                if (preg_match('/[a-zA-Z0-9_$\x7f-\xff]/', $lastChar) && preg_match('/[a-zA-Z0-9_$\x7f-\xff]/', $nextChar)) {
+                if ($this->needsTokenSeparator($lastChar, $nextChar, true)) {
                     $result .= ' ';
                     $lastChar = ' ';
-                } elseif ($char === "\n" && preg_match('/[;{}]$/', rtrim($result))) {
-                    $result .= "\n";
-                    $lastChar = "\n";
                 } else {
                     $lastChar = ' ';
                 }
@@ -949,6 +923,7 @@ class Compressor {
     
     private function loadGitignore($sourceDir) {
         $gitignorePath = $sourceDir . '/.gitignore';
+        $this->gitignorePatterns = [];
         
         if (!file_exists($gitignorePath)) {
             return;
@@ -961,62 +936,375 @@ class Compressor {
             if (empty($line) || $line[0] === '#') {
                 continue;
             }
-            $this->gitignorePatterns[] = $line;
+            $negated = $line[0] === '!';
+            if ($negated) {
+                $line = substr($line, 1);
+            }
+            if ($line === '') {
+                continue;
+            }
+            $this->gitignorePatterns[] = [
+                'pattern' => $line,
+                'negated' => $negated
+            ];
         }
     }
     
-    private function isExcluded($file, $isDirectory) {
+    private function isExcluded($relativePath, $isDirectory) {
+        $relativePath = str_replace('\\', '/', ltrim($relativePath, '/'));
+
         // Check config exclude
         foreach ($this->config['exclude'] as $pattern) {
-            if ($isDirectory && $file === $pattern) {
-                return true;
-            }
-            if (fnmatch($pattern, $file)) {
+            if ($this->matchesPathPattern($pattern, $relativePath, $isDirectory)) {
                 return true;
             }
         }
         
         // Check gitignore patterns
-        foreach ($this->gitignorePatterns as $pattern) {
-            if ($this->matchGitignorePattern($pattern, $file, $isDirectory)) {
-                return true;
+        $ignored = false;
+        foreach ($this->gitignorePatterns as $rule) {
+            if ($this->matchesPathPattern($rule['pattern'], $relativePath, $isDirectory)) {
+                $ignored = !$rule['negated'];
             }
         }
         
-        return false;
+        return $ignored;
     }
     
-    private function matchGitignorePattern($pattern, $file, $isDirectory) {
-        $pattern = trim($pattern);
-        
-        if ($pattern === '/') {
+    private function matchesPathPattern($pattern, $relativePath, $isDirectory) {
+        $pattern = trim(str_replace('\\', '/', $pattern));
+
+        if ($pattern === '' || $pattern === '/') {
             return false;
         }
-        
-        // Handle ** patterns
-        if (strpos($pattern, '**') !== false) {
-            $pattern = str_replace('**', '*', $pattern);
+
+        $directoryOnly = substr($pattern, -1) === '/';
+        if ($directoryOnly) {
+            $pattern = rtrim($pattern, '/');
+            if (!$isDirectory) {
+                return false;
+            }
         }
-        
-        // Leading /
-        if ($pattern[0] === '/') {
-            $pattern = substr($pattern, 1);
+
+        $rootAnchored = substr($pattern, 0, 1) === '/';
+        if ($rootAnchored) {
+            $pattern = ltrim($pattern, '/');
         }
-        
-        // Trailing / for directories
-        if ($pattern[strlen($pattern) - 1] === '/') {
-            $pattern = substr($pattern, 0, -1);
-            if ($isDirectory && fnmatch($pattern, $file)) {
+
+        if ($pattern === '') {
+            return false;
+        }
+
+        $hasPathSeparator = strpos($pattern, '/') !== false;
+        $regex = $this->globPatternToRegex($pattern);
+
+        if ($rootAnchored || $hasPathSeparator) {
+            return (bool) preg_match($regex, $relativePath);
+        }
+
+        foreach (explode('/', $relativePath) as $segment) {
+            if ((bool) preg_match($regex, $segment)) {
                 return true;
             }
         }
-        
-        // Wildcard patterns
-        if (strpos($pattern, '*') !== false) {
-            return fnmatch($pattern, $file);
+
+        return false;
+    }
+
+    private function globPatternToRegex($pattern) {
+        $quoted = preg_quote($pattern, '~');
+        $quoted = str_replace('\*\*', '___DOUBLE_WILDCARD___', $quoted);
+        $quoted = str_replace('\*', '[^/]*', $quoted);
+        $quoted = str_replace('\?', '[^/]', $quoted);
+        $quoted = str_replace('___DOUBLE_WILDCARD___', '.*', $quoted);
+
+        return '~^' . $quoted . '$~';
+    }
+
+    private function getRelativePath($path) {
+        $normalizedBase = rtrim(str_replace('\\', '/', $this->sourceBaseDir), '/');
+        $normalizedPath = str_replace('\\', '/', $path);
+
+        if (strpos($normalizedPath, $normalizedBase) === 0) {
+            return ltrim(substr($normalizedPath, strlen($normalizedBase)), '/');
         }
-        
-        return $file === $pattern;
+
+        return ltrim($normalizedPath, '/');
+    }
+
+    private function getNextNonWhitespaceChar($code, $offset) {
+        $len = strlen($code);
+        for ($i = $offset; $i < $len; $i++) {
+            if (!preg_match('/\s/', $code[$i])) {
+                return $code[$i];
+            }
+        }
+
+        return '';
+    }
+
+    private function needsTokenSeparator($leftChar, $rightChar, $allowHighAscii) {
+        if ($leftChar === '' || $rightChar === '') {
+            return false;
+        }
+
+        $identifierPattern = $allowHighAscii
+            ? '/[a-zA-Z0-9_$\\\\\x7f-\xff]/'
+            : '/[a-zA-Z0-9_$]/';
+
+        if (preg_match($identifierPattern, $leftChar) && preg_match($identifierPattern, $rightChar)) {
+            return true;
+        }
+
+        return (bool) (
+            preg_match('/[+\-*\/%&|<>=!?:.]/', $leftChar) &&
+            preg_match('/[+\-*\/%&|<>=!?:.]/', $rightChar)
+        );
+    }
+
+    private function canStartJsRegex($result) {
+        if ($result === '') {
+            return true;
+        }
+
+        if (preg_match('/[=(:,;\[!&|?{}~^%+*\/-]$/', $result)) {
+            return true;
+        }
+
+        $trimmed = strtolower(trim($result));
+        if (preg_match('/(return|case|typeof|instanceof|in|delete|void|throw|new|yield|await)\s*$/', $trimmed)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function consumeTemplateLiteral($js, $startIndex) {
+        $len = strlen($js);
+        $i = $startIndex + 1;
+        $content = '';
+        $placeholders = [];
+
+        while ($i < $len) {
+            $char = $js[$i];
+            $nextChar = ($i + 1 < $len) ? $js[$i + 1] : '';
+
+            if ($char === '\\') {
+                $content .= $char;
+                if ($i + 1 < $len) {
+                    $i++;
+                    $content .= $js[$i];
+                }
+                $i++;
+                continue;
+            }
+
+            if ($char === '$' && $nextChar === '{') {
+                [$expression, $endIndex] = $this->extractTemplateExpression($js, $i + 2);
+                $placeholder = '___TPL_EXPR_' . count($placeholders) . '___';
+                $placeholders[$placeholder] = '${' . trim($this->minifyJS($expression)) . '}';
+                $content .= $placeholder;
+                $i = $endIndex + 1;
+                continue;
+            }
+
+            if ($char === '`') {
+                $content = $this->minifyTemplateLiteralContent($content, $placeholders);
+                return ['`' . $content . '`', $i + 1];
+            }
+
+            $content .= $char;
+            $i++;
+        }
+
+        return ['`' . strtr($content, $placeholders), $i];
+    }
+
+    private function extractTemplateExpression($source, $startIndex) {
+        $len = strlen($source);
+        $i = $startIndex;
+        $depth = 1;
+        $result = '';
+
+        while ($i < $len) {
+            $char = $source[$i];
+            $nextChar = ($i + 1 < $len) ? $source[$i + 1] : '';
+
+            if ($char === '"' || $char === "'") {
+                [$stringLiteral, $nextIndex] = $this->consumeQuotedString($source, $i, $char);
+                $result .= $stringLiteral;
+                $i = $nextIndex;
+                continue;
+            }
+
+            if ($char === '`') {
+                [$templateLiteral, $nextIndex] = $this->consumeRawTemplateLiteral($source, $i);
+                $result .= $templateLiteral;
+                $i = $nextIndex;
+                continue;
+            }
+
+            if ($char === '/' && $nextChar === '/') {
+                while ($i < $len && $source[$i] !== "\n") {
+                    $result .= $source[$i];
+                    $i++;
+                }
+                continue;
+            }
+
+            if ($char === '/' && $nextChar === '*') {
+                $result .= '/*';
+                $i += 2;
+                while ($i < $len) {
+                    $result .= $source[$i];
+                    if ($source[$i] === '*' && ($i + 1 < $len) && $source[$i + 1] === '/') {
+                        $i += 2;
+                        $result .= '/';
+                        break;
+                    }
+                    $i++;
+                }
+                continue;
+            }
+
+            if ($char === '/' && $this->canStartJsRegex($result)) {
+                [$regexLiteral, $nextIndex] = $this->consumeRegexLiteral($source, $i);
+                $result .= $regexLiteral;
+                $i = $nextIndex;
+                continue;
+            }
+
+            if ($char === '{') {
+                $depth++;
+                $result .= $char;
+                $i++;
+                continue;
+            }
+
+            if ($char === '}') {
+                $depth--;
+                if ($depth === 0) {
+                    return [$result, $i];
+                }
+                $result .= $char;
+                $i++;
+                continue;
+            }
+
+            $result .= $char;
+            $i++;
+        }
+
+        return [$result, $i];
+    }
+
+    private function consumeQuotedString($source, $startIndex, $quote) {
+        $len = strlen($source);
+        $i = $startIndex;
+        $result = '';
+
+        while ($i < $len) {
+            $char = $source[$i];
+            $result .= $char;
+
+            if ($char === '\\' && $i + 1 < $len) {
+                $i++;
+                $result .= $source[$i];
+                $i++;
+                continue;
+            }
+
+            $i++;
+            if ($char === $quote) {
+                break;
+            }
+        }
+
+        return [$result, $i];
+    }
+
+    private function consumeRawTemplateLiteral($source, $startIndex) {
+        $len = strlen($source);
+        $i = $startIndex + 1;
+        $result = '`';
+
+        while ($i < $len) {
+            $char = $source[$i];
+            $nextChar = ($i + 1 < $len) ? $source[$i + 1] : '';
+
+            if ($char === '\\') {
+                $result .= $char;
+                if ($i + 1 < $len) {
+                    $i++;
+                    $result .= $source[$i];
+                }
+                $i++;
+                continue;
+            }
+
+            if ($char === '$' && $nextChar === '{') {
+                [$expression, $endIndex] = $this->extractTemplateExpression($source, $i + 2);
+                $result .= '${' . $expression . '}';
+                $i = $endIndex + 1;
+                continue;
+            }
+
+            $result .= $char;
+            $i++;
+
+            if ($char === '`') {
+                break;
+            }
+        }
+
+        return [$result, $i];
+    }
+
+    private function consumeRegexLiteral($source, $startIndex) {
+        $len = strlen($source);
+        $i = $startIndex;
+        $result = '/';
+        $i++;
+        $inCharClass = false;
+
+        while ($i < $len) {
+            $char = $source[$i];
+            $result .= $char;
+
+            if ($char === '\\' && $i + 1 < $len) {
+                $i++;
+                $result .= $source[$i];
+                $i++;
+                continue;
+            }
+
+            if ($char === '[') {
+                $inCharClass = true;
+            } elseif ($char === ']' && $inCharClass) {
+                $inCharClass = false;
+            } elseif ($char === '/' && !$inCharClass) {
+                $i++;
+                while ($i < $len && preg_match('/[a-z]/i', $source[$i])) {
+                    $result .= $source[$i];
+                    $i++;
+                }
+                return [$result, $i];
+            }
+
+            $i++;
+        }
+
+        return [$result, $i];
+    }
+
+    private function minifyTemplateLiteralContent($content, $placeholders) {
+        $probe = strtr($content, array_fill_keys(array_keys($placeholders), ''));
+
+        if (!preg_match('/<\s*\/?[a-z!][^>]*>/i', $probe)) {
+            return strtr($content, $placeholders);
+        }
+
+        return strtr($this->minifyHTML($content), $placeholders);
     }
     
     // ==========================================
