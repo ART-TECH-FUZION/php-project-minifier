@@ -4,7 +4,7 @@
  * PHP Compress CLI - Vite-style PHP Project Minifier
  * 
  * Install: composer global require compress/php-compress
- * Usage: compress <source_directory> [output_directory]
+ * Usage: compress [source_directory] [output_directory]
  * 
  * @version 1.0.0
  */
@@ -76,20 +76,30 @@ function printBanner() {
 /**
  * Show help message
  */
-function showHelp() {
+function getCommandName($argv) {
+    $script = basename($argv[0] ?? 'compress');
+    return $script !== '' ? $script : 'compress';
+}
+
+/**
+ * Show help message
+ */
+function showHelp($commandName = 'compress') {
     printBanner();
     
     printColor("USAGE\n", 'yellow');
-    echo "    compress <source_directory> [output_directory]\n";
-    echo "    compress --init                 # Create compress.json config\n";
-    echo "    compress --watch <directory>    # Watch and compress on change\n";
-    echo "    compress --help                 # Show this help\n";
-    echo "    compress --version              # Show version\n";
+    echo "    {$commandName} [source_directory] [output_directory]\n";
+    echo "    {$commandName} --init                 # Create compress.json config\n";
+    echo "    {$commandName} --watch <directory>    # Watch and compress on change\n";
+    echo "    {$commandName} --help                 # Show this help\n";
+    echo "    {$commandName} --version              # Show version\n";
     echo "\n";
     
     printColor("ARGUMENTS\n", 'yellow');
-    echo "    source_directory    Path to your PHP project\n";
-    echo "    output_directory    Optional: Output path (default: source/compress)\n";
+    echo "    source_directory    Optional: Path to your PHP project\n";
+    echo "                        If omitted, current directory is used\n";
+    echo "    output_directory    Optional: Output path\n";
+    echo "                        Priority: CLI arg > compress.json output > project/dist\n";
     echo "\n";
     
     printColor("OPTIONS\n", 'yellow');
@@ -103,10 +113,11 @@ function showHelp() {
     echo "\n";
     
     printColor("EXAMPLES\n", 'yellow');
-    echo "    compress /path/to/project\n";
-    echo "    compress /path/to/project /path/to/output\n";
-    echo "    compress --init\n";
-    echo "    compress --watch /path/to/project\n";
+    echo "    {$commandName}                       # Build current directory\n";
+    echo "    {$commandName} /path/to/project\n";
+    echo "    {$commandName} /path/to/project /path/to/output\n";
+    echo "    {$commandName} --init\n";
+    echo "    {$commandName} --watch /path/to/project\n";
     echo "\n";
     
     printColor("SUPPORTED FILES\n", 'yellow');
@@ -120,18 +131,20 @@ function showHelp() {
     echo "\n";
     
     printColor("OUTPUT\n", 'yellow');
-    echo "    Creates 'compress' folder with:\n";
+    echo "    Creates output folder with:\n";
     echo "    • Same directory structure as source\n";
     echo "    • Minified versions of all supported files\n";
     echo "    • index.php with 'Silence is golden' in every folder\n";
+    echo "\n";
+    echo "    Tip: Set \"output\": \"./dist\" or \"./build\" in compress.json for your default folder.\n";
     echo "\n";
 }
 
 /**
  * Show version
  */
-function showVersion() {
-    echo "compress v" . COMPRESS_VERSION . "\n";
+function showVersion($commandName = 'compress') {
+    echo $commandName . " v" . COMPRESS_VERSION . "\n";
 }
 
 /**
@@ -148,7 +161,7 @@ function createConfig($directory) {
     
     $config = [
         'source' => './',
-        'output' => './compress',
+        'output' => './dist',
         'exclude' => [
             '.git'
         ],
@@ -174,10 +187,55 @@ function formatBytes($bytes) {
 }
 
 /**
+ * Resolve config/CLI output path
+ */
+function resolvePathFromBase($baseDir, $path) {
+    $path = trim((string) $path);
+
+    if ($path === '') {
+        return $baseDir . '/dist';
+    }
+
+    if ($path === '.') {
+        return $baseDir;
+    }
+
+    if ($path[0] === '/' || preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) || strpos($path, '\\\\') === 0) {
+        return $path;
+    }
+
+    if (strpos($path, './') === 0 || strpos($path, '.\\') === 0) {
+        $path = substr($path, 2);
+    }
+
+    return rtrim($baseDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($path, '/\\');
+}
+
+/**
+ * Load compress.json if present
+ */
+function loadConfigFile($projectRoot, $minimal) {
+    $configPath = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'compress.json';
+    $config = [];
+
+    if (!file_exists($configPath)) {
+        return $config;
+    }
+
+    if (!$minimal) {
+        printColor("✓ ", 'green');
+        echo "Loaded compress.json\n\n";
+    }
+
+    return json_decode(file_get_contents($configPath), true) ?? [];
+}
+
+/**
  * Main entry point
  */
 function main($argv) {
     $argc = count($argv);
+    $commandName = getCommandName($argv);
     
     // Parse arguments
     $options = [];
@@ -195,12 +253,12 @@ function main($argv) {
     
     // Handle options
     if (in_array('--help', $options) || in_array('-h', $options)) {
-        showHelp();
+        showHelp($commandName);
         exit(0);
     }
     
     if (in_array('--version', $options) || in_array('-v', $options)) {
-        showVersion();
+        showVersion($commandName);
         exit(0);
     }
     
@@ -208,25 +266,6 @@ function main($argv) {
         $dir = $arguments[0] ?? getcwd();
         createConfig($dir);
         exit(0);
-    }
-    
-    // Need source directory
-    if (empty($arguments)) {
-        printColor("Error: ", 'red');
-        echo "Missing source directory.\n\n";
-        echo "Usage: compress <source_directory> [output_directory]\n";
-        echo "Try: compress --help for more information.\n";
-        exit(1);
-    }
-    
-    $sourceDir = realpath($arguments[0]);
-    $outputDir = $arguments[1] ?? ($sourceDir . '/compress');
-    
-    // Validate source
-    if (!$sourceDir || !is_dir($sourceDir)) {
-        printColor("Error: ", 'red');
-        echo "Source directory does not exist: {$arguments[0]}\n";
-        exit(1);
     }
     
     // Options
@@ -238,18 +277,33 @@ function main($argv) {
     if (!$minimal) {
         printBanner();
     }
-    
-    // Load config if exists
-    $configPath = $sourceDir . '/compress.json';
-    $config = [];
-    
-    if (file_exists($configPath)) {
-        if (!$minimal) {
-            printColor("✓ ", 'green');
-            echo "Loaded compress.json\n\n";
-        }
-        $config = json_decode(file_get_contents($configPath), true) ?? [];
+
+    $projectRoot = empty($arguments) ? getcwd() : $arguments[0];
+    $projectRoot = realpath($projectRoot);
+
+    if (!$projectRoot || !is_dir($projectRoot)) {
+        printColor("Error: ", 'red');
+        $label = empty($arguments) ? getcwd() : $arguments[0];
+        echo "Source directory does not exist: {$label}\n";
+        exit(1);
     }
+
+    $config = loadConfigFile($projectRoot, $minimal);
+
+    $sourceDir = empty($arguments)
+        ? realpath(resolvePathFromBase($projectRoot, $config['source'] ?? './'))
+        : $projectRoot;
+
+    if (!$sourceDir || !is_dir($sourceDir)) {
+        printColor("Error: ", 'red');
+        $configuredSource = $config['source'] ?? './';
+        echo "Configured source directory does not exist: {$configuredSource}\n";
+        exit(1);
+    }
+
+    $outputDir = isset($arguments[1])
+        ? resolvePathFromBase($projectRoot, $arguments[1])
+        : resolvePathFromBase($projectRoot, $config['output'] ?? './dist');
 
     $createIndex = in_array('--no-index', $options)
         ? false

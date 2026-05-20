@@ -30,7 +30,6 @@ class Compressor {
     private $gitignorePatterns = [];
     private $sourceBaseDir = '';
     private $outputDir = '';
-    private $isFirstLevel = true;
     
     /**
      * Constructor
@@ -57,7 +56,6 @@ class Compressor {
         $this->resetStats();
         $this->sourceBaseDir = realpath($sourceDir);
         $this->outputDir = realpath($outputDir) ?: $outputDir;
-        $this->isFirstLevel = true;
         $this->loadGitignore($this->sourceBaseDir);
         
         if (!$dryRun) {
@@ -104,14 +102,10 @@ class Compressor {
             $srcPath = $src . DIRECTORY_SEPARATOR . $file;
             $dstPath = $dst . DIRECTORY_SEPARATOR . $file;
             
-            // Skip if this is the output 'compress' directory in the source
-            // (when output dir is named 'compress' and exists in source)
-            if ($this->isFirstLevel && $file === 'compress' && is_dir($srcPath)) {
-                $outputBasename = basename($this->outputDir);
-                if ($file === $outputBasename) {
-                    $this->stats['skipped']++;
-                    continue;
-                }
+            // Skip the generated output directory if it lives inside the source tree.
+            if (is_dir($srcPath) && $this->isOutputDirectory($srcPath)) {
+                $this->stats['skipped']++;
+                continue;
             }
             
             // Check exclude patterns
@@ -123,10 +117,6 @@ class Compressor {
             }
             
             if (is_dir($srcPath)) {
-                // Mark that we're past first level
-                $wasFirst = $this->isFirstLevel;
-                $this->isFirstLevel = false;
-                
                 if (!$dryRun) {
                     if (!is_dir($dstPath)) {
                         @mkdir($dstPath, 0755, true);
@@ -138,9 +128,6 @@ class Compressor {
                 }
                 
                 $this->recurseCopy($srcPath, $dstPath, $dryRun);
-                
-                // Restore first level state
-                $this->isFirstLevel = $wasFirst;
             } else {
                 $this->processFile($srcPath, $dstPath, $dryRun);
             }
@@ -1010,6 +997,14 @@ class Compressor {
         }
 
         return ltrim($normalizedPath, '/');
+    }
+
+    private function isOutputDirectory($path) {
+        return $this->normalizePath($path) === $this->normalizePath($this->outputDir);
+    }
+
+    private function normalizePath($path) {
+        return rtrim(str_replace('\\', '/', (string) $path), '/');
     }
 
     private function getNextNonWhitespaceChar($code, $offset) {
