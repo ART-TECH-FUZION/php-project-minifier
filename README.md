@@ -68,12 +68,12 @@ PHP Project Minifier is a command-line tool that makes your project files smalle
 
 **Step 2: Clone the Repository**
 ```bash
-git clone https://github.com/arttechfuzion/PHP-Project-Minifier.git
+git clone https://github.com/ART-TECH-FUZION/php-project-minifier.git
 ```
 
 **Step 3: Navigate to the Project**
 ```bash
-cd PHP-Project-Minifier
+cd php-project-minifier
 ```
 
 **Step 4: Make Scripts Executable (Linux/macOS)**
@@ -92,14 +92,14 @@ php bin/compress --version
 ### Method 2: Download as ZIP
 
 **Step 1: Download ZIP**
-- Go to: https://github.com/arttechfuzion/PHP-Project-Minifier
+- Go to: https://github.com/ART-TECH-FUZION/php-project-minifier.git
 - Click the green **"Code"** button
 - Select **"Download ZIP"**
 
 **Step 2: Extract the ZIP**
 ```bash
-unzip PHP-Project-Minifier-main.zip
-cd PHP-Project-Minifier-main
+unzip php-project-minifier-main.zip
+cd php-project-minifier-main
 ```
 
 **Step 3: Make Scripts Executable**
@@ -125,7 +125,7 @@ composer global require compress/php-compress
 
 ```bash
 # Navigate to the minifier directory
-cd /Users/rahulkumar/Desktop/lib/PHP-Project-Minifier
+cd /users/name/desktop/lib/php-project-minifier
 
 # Compress your project
 php bin/compress /path/to/your/project
@@ -185,13 +185,13 @@ php bin/compress
 ### Example 2: Compress a Specific Folder
 
 ```bash
-php bin/compress /Users/rahul/my-website
+php bin/compress /users/user-name/my-website
 ```
 
 ### Example 3: Specify Custom Output Folder
 
 ```bash
-php bin/compress /Users/rahul/my-website /Users/rahul/minified-output
+php bin/compress /users/user-name/my-website /users/user-name/my-website/minified-output
 ```
 
 ### Example 4: Use compress.json Config
@@ -395,14 +395,14 @@ chmod +x bin/build
 
 **Solution:** Add the bin folder to your PATH
 ```bash
-export PATH="/Users/rahulkumar/Desktop/lib/PHP-Project-Minifier/bin:$PATH"
+export PATH="/users/user-namedDesktop/lib/php-project-minifier/bin:$PATH"
 ```
 
 ### Problem: "Source directory does not exist"
 
 **Solution:** Use the full absolute path
 ```bash
-php bin/compress /Users/rahul/my-project
+php bin/compress /users/user-name/my-project
 ```
 
 ### Problem: Want to change output folder
